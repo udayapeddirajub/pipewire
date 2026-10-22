@@ -9,6 +9,7 @@ tools_sources = [
   [ 'pw-metadata', [ 'pw-metadata.c' ] ],
   [ 'pw-loopback', [ 'pw-loopback.c' ] ],
   [ 'pw-link', [ 'pw-link.c' ] ],
+  [ 'pw-voiceui', [ 'pw-voiceui.c', 'sva-contract.c', 'sva-stream.c', 'sva-listener.c', 'sva-lab.c' ] ],
 ]
 
 foreach t : tools_sources
