@@ -1,5 +1,24 @@
-/* Event callbacks (core, node params, registry) and the interactive REPL
- * for pw-voiceui listen. */
+/* sva-listener.c - all event callbacks + the interactive REPL
+ *
+ * Owns every PipeWire callback the tool registers (core done/error, registry
+ * add/remove, and - crucially - the node param listener Kiruthika declared but
+ * never wired) plus the stdin-driven interactive driver.
+ *
+ * Two gaps in the base pw-voiceui.c are closed here, without adding any new
+ * CLI surface:
+ *
+ *   1. The bound node's SPA_PARAM_Props is where the plugin actually pushes
+ *      detection (status/confidence/kw_start/kw_end as strings). The base
+ *      only listened on an "sva.state" metadata key that the plugin never
+ *      publishes - a dead path, now removed. sva_listener_attach_node() wires
+ *      the unused node_listener hook and subscribes to SPA_PARAM_Props so real
+ *      events arrive.
+ *
+ *   2. sva_listener_start_interactive() runs a line REPL on stdin that walks
+ *      IDLE -> LOADED -> ACTIVE -> DETECTED using only the existing
+ *      set/set-param/send-command vocabulary. DETECTED is driven by the real
+ *      node event from (1), not by the client guessing.
+ */
 #include "config.h"
 
 #include <errno.h>
@@ -30,6 +49,8 @@ const char *sva_state_name(enum sva_state state)
     }
     return "UNKNOWN";
 }
+
+/* ---- core callbacks ---------------------------------------------------- */
 
 static void done(void *user_data, uint32_t id, int seq)
 {
@@ -63,16 +84,18 @@ const struct pw_core_events core_events = {
     .error = core_error,
 };
 
+/* ---- node param listener : the real detection path --------------------- */
+
 /* The plugin pushes detection as an Object Props carrying a single
- * SPA_PROP_params struct of alternating key/value strings. Walk that struct
- * and, when status==detected, advance the lifecycle and hand off to LAB. */
+ * SPA_PROP_params struct of alternating key/value strings. Walk that struct,
+ * print each pair, and when status==detected advance the lifecycle and hand
+ * off to the LAB module. */
 static void node_param(void *user_data, int seq, uint32_t id,
         uint32_t index, uint32_t next, const struct spa_pod *param)
 {
     struct data *data = user_data;
     const struct spa_pod_prop *prop;
     struct spa_pod_object *obj;
-    bool saw_pair = false;
     bool detected = false;
 
     if (param == NULL || id != SPA_PARAM_Props)
@@ -98,20 +121,16 @@ static void node_param(void *user_data, int seq, uint32_t id,
         if (!spa_pod_is_struct(val))
             continue;
 
+        printf("\n-- SVA detection event --\n");
         spa_pod_parser_pod(&p, val);
         if (spa_pod_parser_push_struct(&p, &f) < 0)
             continue;
-
         for (;;) {
             const char *s;
             if (spa_pod_parser_get_string(&p, &s) < 0)
                 break;
             pair[n & 1] = s;
             if ((n & 1) == 1) {
-                if (!saw_pair) {
-                    printf("\n-- SVA detection event --\n");
-                    saw_pair = true;
-                }
                 printf("  %s = %s\n", pair[0], pair[1]);
                 if (spa_streq(pair[0], "status") &&
                         pair[1] && spa_streq(pair[1], "detected"))
@@ -120,13 +139,7 @@ static void node_param(void *user_data, int seq, uint32_t id,
             n++;
         }
         spa_pod_parser_pop(&p, &f);
-    }
-
-    if (saw_pair) {
         printf("-------------------------\n");
-        if (data->interactive)
-            printf("sva> ");
-        fflush(stdout);
     }
 
     if (detected && !data->detected) {
@@ -153,8 +166,12 @@ void sva_listener_attach_node(struct data *data)
         return;
 
     pw_node_add_listener(data->node, &data->node_listener, &node_events, data);
+    /* Ask the server to stream SPA_PARAM_Props updates as the plugin pushes
+     * them - this is what makes real detection events arrive. */
     pw_node_subscribe_params(data->node, ids, SPA_N_ELEMENTS(ids));
 }
+
+/* ---- registry callbacks ------------------------------------------------ */
 
 static void registry_global(void *user_data, uint32_t id, uint32_t permissions,
         const char *type, uint32_t version, const struct spa_dict *props)
@@ -205,11 +222,23 @@ const struct pw_registry_events registry_events = {
     .global_remove = registry_global_remove,
 };
 
+/* ---- interactive REPL -------------------------------------------------- */
+
 static void interactive_help(void)
 {
     printf(
-        "Commands: set <sva-key> <value> | set-param <id> <json> | "
-        "send-command <id> <json> | state | help | quit\n");
+        "Interactive SVA driver. Commands (existing vocabulary only):\n"
+        "  set <sva-key> <value>              e.g. set sva.model.path /data/model.bin\n"
+        "  set-param <param-id> <json>\n"
+        "  send-command <command-id> <json>\n"
+        "  state                              show the current lifecycle state\n"
+        "  help                               show this help\n"
+        "  quit                               exit\n"
+        "\n"
+        "Typical lifecycle:\n"
+        "  set sva.model.path <path>   (IDLE  -> LOADED)\n"
+        "  set sva.mode LPI            (LOADED -> ACTIVE)\n"
+        "  <wait for detection event>  (ACTIVE -> DETECTED)\n");
 }
 
 /* Advance the client-side lifecycle view based on the key just set. The
@@ -333,5 +362,6 @@ void sva_listener_start_interactive(struct data *data)
 
     data->stdin_source = pw_loop_add_io(loop, STDIN_FILENO,
             SPA_IO_IN | SPA_IO_ERR | SPA_IO_HUP, false, on_stdin, data);
+    /* Keep the core alive and responsive while we wait on stdin. */
     data->listening = true;
 }

@@ -1,5 +1,11 @@
-/* On-the-wire SVA property contract: key normalisation, value validation,
- * and the SPA_PARAM_Props POD builder. */
+/* sva-contract.c - the on-the-wire SVA property contract
+ *
+ * Extracted verbatim from Kiruthika's pw-voiceui.c so the wire format is
+ * byte-for-byte identical to the proven-working tool: key normalisation
+ * (phase2_sva_key), value validation (validate_sva_property) and the
+ * SPA_PARAM_Props POD builder (build_sva_props_pod). No behaviour changes -
+ * only the module boundary is new.
+ */
 #include "config.h"
 
 #include <errno.h>
@@ -130,9 +136,11 @@ bool build_sva_props_pod(struct spa_pod_builder *builder, const char *key,
             spa_streq(key, "sva.bit.width"))
         spa_pod_builder_int(builder, atoi(value));
     else if (spa_streq(key, "sva.capture.requested") ||
-            spa_streq(key, "sva.lab.enabled") ||
-            spa_streq(key, "sva.reset") ||
-            spa_streq(key, "sva.restart")) {
+            spa_streq(key, "sva.lab.enabled")) {
+        bool bool_value;
+        parse_bool_value(value, &bool_value);
+        spa_pod_builder_bool(builder, bool_value);
+    } else if (spa_streq(key, "sva.reset") || spa_streq(key, "sva.restart")) {
         bool bool_value;
         parse_bool_value(value, &bool_value);
         spa_pod_builder_bool(builder, bool_value);

@@ -1,10 +1,20 @@
-/* Client-side LAB (look-ahead buffer) processing.
+/* sva-lab.c - client-side LAB (look-ahead buffer) processing
  *
  * The phase2 plugin drains the LAB synchronously to a raw PCM file under
- * /tmp as sva_lab_dump_<unixtime>.pcm, completing the write before it flips
- * detection status to "detected". On DETECTED we locate the newest dump and
- * wrap it in a canonical WAV header using the platform's fixed SVA capture
- * format (16 kHz / mono / 16-bit) so the captured audio is playable.
+ * SVA_DEBUG_DUMP_LOCATION ("/tmp") as /tmp/sva_lab_dump_<unixtime>.pcm,
+ * completing the write *before* it flips detection status to "detected".
+ * By the time our node_param callback fires on that event, the file is
+ * whole and race-free (plugin "Option A").
+ *
+ * Kiruthika's pw-voiceui had no path to bring that buffer back to the
+ * client - that is the headline gap called out in the design review. Until
+ * a true in-band buffer copy exists, this module stands in for it: on
+ * DETECTED we locate the newest dump and wrap the raw PCM in a canonical
+ * 44-byte WAV header using the platform's fixed SVA capture format
+ * (16 kHz / mono / 16-bit; see SVA_LAB_DEFAULT_*), so the captured keyword
+ * audio is immediately playable without any new CLI surface. The raw dump
+ * carries no format and the node never reports one, so the format here is a
+ * static default rather than anything negotiated or remembered at runtime.
  */
 #include "config.h"
 
@@ -23,10 +33,15 @@
 #define SVA_LAB_DUMP_PREFIX "sva_lab_dump_"
 #define SVA_LAB_DUMP_SUFFIX ".pcm"
 
+/* Default PCM format assumed when the plugin never told us otherwise.
+ * SVA keyword capture is 16 kHz / mono / 16-bit on this platform. */
 #define SVA_LAB_DEFAULT_RATE     16000u
 #define SVA_LAB_DEFAULT_CHANNELS 1u
 #define SVA_LAB_DEFAULT_BITS     16u
 
+/* Scan SVA_LAB_DUMP_DIR for the most recently modified
+ * sva_lab_dump_*.pcm and write its absolute path into out. Returns false
+ * if the directory can't be read or no matching dump exists. */
 bool sva_lab_find_latest_dump(char *out, size_t out_sz)
 {
     DIR *dir;
@@ -92,6 +107,10 @@ static void write_le32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)((v >> 24) & 0xff);
 }
 
+/* Wrap a raw PCM file in a canonical 44-byte WAV (RIFF/PCM) header. The raw
+ * dump carries no format and the node never reports one, so we always use the
+ * platform's fixed SVA capture format (SVA_LAB_DEFAULT_*: 16 kHz / mono /
+ * 16-bit). */
 bool sva_lab_pcm_to_wav(const char *pcm_path, const char *wav_path)
 {
     FILE *in = NULL, *out = NULL;
@@ -122,17 +141,20 @@ bool sva_lab_pcm_to_wav(const char *pcm_path, const char *wav_path)
     block_align = (uint16_t)(channels * (bits / 8));
     byte_rate = rate * block_align;
 
+    /* RIFF header */
     memcpy(hdr + 0, "RIFF", 4);
-    write_le32(hdr + 4, 36 + data_bytes);
+    write_le32(hdr + 4, 36 + data_bytes);   /* chunk size = 4 + (8+16) + (8+data) */
     memcpy(hdr + 8, "WAVE", 4);
+    /* fmt chunk */
     memcpy(hdr + 12, "fmt ", 4);
-    write_le32(hdr + 16, 16);
-    write_le16(hdr + 20, 1);
+    write_le32(hdr + 16, 16);               /* PCM fmt chunk size */
+    write_le16(hdr + 20, 1);                /* audio format = PCM */
     write_le16(hdr + 22, channels);
     write_le32(hdr + 24, rate);
     write_le32(hdr + 28, byte_rate);
     write_le16(hdr + 32, block_align);
     write_le16(hdr + 34, bits);
+    /* data chunk */
     memcpy(hdr + 36, "data", 4);
     write_le32(hdr + 40, data_bytes);
 
@@ -164,13 +186,18 @@ done:
     return ok;
 }
 
+/* Invoked from the node param listener the instant detection fires. Locate
+ * the LAB dump the plugin just finished writing and wrap it to a playable
+ * WAV beside it. This is the client-side stand-in for the not-yet-built
+ * in-band buffer copy; it adds no CLI surface and touches nothing the
+ * plugin owns. */
 void sva_lab_on_detected(struct data *data)
 {
     char pcm[1024];
     char wav[1024];
     size_t len;
 
-    (void)data;
+    (void)data;  /* reserved for the future in-band buffer copy */
 
     if (!sva_lab_find_latest_dump(pcm, sizeof(pcm))) {
         printf("[lab] no LAB dump found under %s "
@@ -181,6 +208,7 @@ void sva_lab_on_detected(struct data *data)
 
     printf("[lab] captured keyword audio: %s\n", pcm);
 
+    /* Derive <dump>.wav from <dump>.pcm. */
     snprintf(wav, sizeof(wav), "%s", pcm);
     len = strlen(wav);
     if (len > 4 && strcmp(wav + len - 4, SVA_LAB_DUMP_SUFFIX) == 0)

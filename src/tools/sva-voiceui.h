@@ -1,3 +1,11 @@
+/* SVA VoiceUI tool - shared definitions
+ *
+ * Built on top of Kiruthika's pw-voiceui (PipeWire MR !2969). The single
+ * 643-line source is split into clearly separated modules per the design
+ * review action item: listener/callback handling (sva-listener.c), stream /
+ * node management (sva-stream.c) and LAB processing (sva-lab.c). This header
+ * carries the state shared across those modules only - no logic lives here.
+ */
 #ifndef SVA_VOICEUI_H
 #define SVA_VOICEUI_H
 
@@ -12,8 +20,9 @@
 #define DEFAULT_TARGET_ROLE "VoiceUI"
 #define DEFAULT_TARGET_NAME "pal_source_voice_ui"
 
-/* Client-side view of the recognition lifecycle; the plugin owns the real
- * state. DETECTED is driven by a real SPA_PARAM_Props event on the node. */
+/* Client-side view of the recognition lifecycle. The plugin owns the real
+ * state; these transitions reflect the operations the user has issued, with
+ * DETECTED driven by a real SPA_PARAM_Props event from the bound node. */
 enum sva_state {
     SVA_STATE_IDLE = 0,
     SVA_STATE_LOADED,
@@ -64,18 +73,21 @@ struct data {
     bool listening;
     uint32_t sva_node_id;
 
+    /* interactive state-based driver (listen on a TTY) */
     bool interactive;
     enum sva_state state;
     bool detected;
     struct spa_source *stdin_source;
 };
 
+/* ---- sva-contract.c : the on-the-wire SVA property contract ---- */
 const char *phase2_sva_key(const char *key);
 bool parse_bool_value(const char *value, bool *result);
 bool validate_sva_property(const char *key, const char *value);
 bool build_sva_props_pod(struct spa_pod_builder *builder, const char *key,
         const char *value, struct spa_pod **pod);
 
+/* ---- sva-stream.c : node discovery, bind, param/command dispatch ---- */
 void global_free(struct global *global);
 const char *global_prop(struct global *global, const char *key);
 bool global_is_voiceui_node(struct data *data, struct global *global);
@@ -86,12 +98,14 @@ bool sva_stream_set_param(struct data *data, const char *param_id, const char *j
 bool sva_stream_send_command(struct data *data, const char *command_id, const char *json);
 bool run_action(struct data *data);
 
+/* ---- sva-listener.c : all event callbacks + interactive REPL ---- */
 extern const struct pw_core_events core_events;
 extern const struct pw_registry_events registry_events;
 void sva_listener_attach_node(struct data *data);
 void sva_listener_start_interactive(struct data *data);
 const char *sva_state_name(enum sva_state state);
 
+/* ---- sva-lab.c : LAB (look-ahead buffer) processing ---- */
 bool sva_lab_find_latest_dump(char *out, size_t out_sz);
 bool sva_lab_pcm_to_wav(const char *pcm_path, const char *wav_path);
 void sva_lab_on_detected(struct data *data);

@@ -1,4 +1,14 @@
-/* Node discovery, bind, and param/command dispatch for pw-voiceui. */
+/* sva-stream.c - node discovery, bind, and param/command dispatch
+ *
+ * Owns everything about finding the VoiceUI node on the registry, binding a
+ * proxy to it, and turning a user action into an on-wire operation. The POD
+ * wire format itself lives in sva-contract.c; this module only drives it.
+ *
+ * Extracted from Kiruthika's pw-voiceui.c (PipeWire MR !2969). The dispatch
+ * was factored into sva_stream_set_key / sva_stream_set_param /
+ * sva_stream_send_command so the same code path serves both the one-shot CLI
+ * and the interactive REPL - the bytes put on the wire are unchanged.
+ */
 #include "config.h"
 
 #include <errno.h>
@@ -187,6 +197,9 @@ bool run_action(struct data *data)
     if (!sva_stream_bind_target(data))
         return false;
 
+    /* Interactive TTY driver: a stdin REPL that walks the recognition
+     * lifecycle using only the existing keys/commands, and observes real
+     * detection events pushed on SPA_PARAM_Props. */
     if (data->interactive) {
         data->sva_node_id = data->target->id;
         sva_listener_attach_node(data);
