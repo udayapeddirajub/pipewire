@@ -1,10 +1,4 @@
 /* SVA VoiceUI tool - shared definitions
- *
- * Built on top of Kiruthika's pw-voiceui (PipeWire MR !2969). The single
- * 643-line source is split into clearly separated modules per the design
- * review action item: listener/callback handling (sva-listener.c), stream /
- * node management (sva-stream.c) and LAB processing (sva-lab.c). This header
- * carries the state shared across those modules only - no logic lives here.
  */
 #ifndef SVA_VOICEUI_H
 #define SVA_VOICEUI_H
